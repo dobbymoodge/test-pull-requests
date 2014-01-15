@@ -40,6 +40,10 @@ Options:
     Merges all of the pretested pull requests
 --repo <repo>
     The repo of the pull request
+--pr_source_user
+--pr_source_branch
+--pr_target_branch
+
 USAGE
   exit 255
 end
@@ -51,7 +55,10 @@ opts = GetoptLong.new(
 ["--test_merge_pull_request",  GetoptLong::REQUIRED_ARGUMENT],
 ["--merge_pretest_success",    GetoptLong::NO_ARGUMENT],
 ["--repo",                     GetoptLong::REQUIRED_ARGUMENT],
-["--config",                   GetoptLong::REQUIRED_ARGUMENT]
+["--config",                   GetoptLong::REQUIRED_ARGUMENT],
+["--pr_source_user",           GetoptLong::OPTIONAL_ARGUMENT],
+["--pr_source_branch",         GetoptLong::REQUIRED_ARGUMENT],
+["--pr_target_branch",         GetoptLong::OPTIONAL_ARGUMENT],
 )
 
 args = {}
@@ -71,6 +78,10 @@ test_merge_pull_id = args[:test_merge_pull_request]
 pull_id_repo = args[:repo]
 config = args[:config]
 merge_pretest_success = args[:merge_pretest_success]
+
+pr_source_user   = args[:pr_source_user]
+pr_source_branch = args[:pr_source_branch]
+pr_target_branch = args[:pr_target_branch]
 
 include Hub
 
@@ -166,6 +177,17 @@ module Hub
         end
       end
     end
+
+    def create_pull_request(repo, title, head, base, body, num_tries=2)
+      params = { :title => title, :head => head, :base => base, :body => body }
+      res = post "https://api.github.com/repos/#{Properties['github_user']}/#{repo}/pulls", params
+      (1..num_tries).each do |i|
+        return res.data if res.success?
+        res.error! if i == num_tries
+        sleep 1 if i > 1 && i < num_tries
+      end
+    end
+
 
     def is_mergeable?(id, repo, num_tries=3)
       # This call isn't reliable so make sure
@@ -1264,6 +1286,10 @@ elsif local_merge_pull_id
   @api_client.local_merge_pull_request(local_merge_pull_id, pull_id_repo)
 elsif test_merge_pull_id
   @api_client.test_merge_pull_request(test_merge_pull_id, pull_id_repo, Properties['settings']['merge_test_settings'])
+elsif pr_source_branch and pull_id_repo
+  head = "#{pr_source_user}#{':' if pr_source_user}#{pr_source_branch}"
+  base = pr_target_branch || 'master'
+  @api_client.create_pull_request(pull_id_repo, 'test', head, base, 'pr create test')
 else
   # Process all the pull requests for testing
   $stderr.puts "Processing pull requests..."
