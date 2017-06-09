@@ -22,6 +22,7 @@ require 'net/https'
 require 'getoptlong'
 require 'time'
 require 'json'
+require 'faraday-http-cache'
 
 def usage
   puts <<USAGE
@@ -960,11 +961,11 @@ popd
       perform_request url, :Put do |req|
         if params
           req.body = JSON.dump params
-          req['Content-Type'] = 'application/json;charset=utf-8'
+          req.params['Content-Type'] = 'application/json;charset=utf-8'
         end
-        req['User-Agent'] = Properties['bot_github_user']
+        req.params['User-Agent'] = Properties['bot_github_user']
         yield req if block_given?
-        req['Content-Length'] = req.body ? req.body.length : 0
+        req.params['Content-Length'] = req.body ? req.body.length : 0
       end
     end
 
@@ -972,30 +973,39 @@ popd
       perform_request url, :Post do |req|
         if params
           req.body = JSON.dump params
-          req['Content-Type'] = 'application/json;charset=utf-8'
-          req['User-Agent'] = Properties['bot_github_user']
+          req.params['Content-Type'] = 'application/json;charset=utf-8'
+          req.params['User-Agent'] = Properties['bot_github_user']
         end
         yield req if block_given?
-        req['Content-Length'] = req.body ? req.body.length : 0
+        req.params['Content-Length'] = req.body ? req.body.length : 0
       end
     end
 
     def perform_request url, type
       url = URI.parse url unless url.respond_to? :host
+      use_ssl = 'https' == url.scheme
 
-      require 'net/https'
-      req = Net::HTTP.const_get(type).new request_uri(url)
-      req['User-Agent'] = Properties['bot_github_user']
-
-      http = configure_connection(req, url) do |host_url|
-        create_connection host_url
+      client = Faraday.new(proxy: config.proxy_uri(use_ssl)) do |stack|
+        stack.use :http_cache
       end
 
+      req = Net::HTTP.const_get(type).new request_uri(url)
+      client.params['User-Agent'] = Properties['bot_github_user']
+
+      http = configure_connection(client.params, url) do |host_url|
+        create_connection host_url
+      end
+      client.ssl.verify_mode = OpenSSL::SSL::VERIFY_NONE if use_ssl
+
       apply_authentication(req, url)
-      yield req if block_given?
+      puts "req: #{req}, auth: #{req['Authorization']}"
+      if !req['Authorization'].empty?
+        client.params['Authorization'] = req['Authorization']
+      end
+      yield client if block_given?
 
       begin
-        res = http.start { http.request(req) }
+        res = client.run_request(type.downcase, url, nil, nil) #http.start { http.request(req) }
         res.extend ResponseMethods
         # Update @rate_limit_remaining whenever we get it in a
         # response header
@@ -1008,7 +1018,7 @@ popd
 
     def delete url
       perform_request url, :Delete do |req|
-        req['User-Agent'] = Properties['bot_github_user']
+        req.params['User-Agent'] = Properties['bot_github_user']
         yield req if block_given?
       end
     end
